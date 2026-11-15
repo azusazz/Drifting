@@ -1,0 +1,6 @@
+{
+  "name": "Drifting",
+  "description": "一款以海上漂流为背景的 2.5D 生存、基地建造与木屋家园装修游戏。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
