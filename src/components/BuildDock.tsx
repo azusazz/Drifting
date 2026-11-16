@@ -20,6 +20,7 @@ import {
   BUILD_ITEMS,
   BUILD_ITEMS_BY_CATEGORY,
   CATEGORY_TABS,
+  HOOK_RAFT_EDGE_DIAMETERS,
 } from '../constants/buildings';
 import {
   BuildCategory,
@@ -54,11 +55,16 @@ const RESOURCE_LABELS: Record<ResourceType, string> = {
   food: '食物',
 };
 
-const BUILD_CATEGORIES: Array<{ id: Exclude<BuildCategory, 'decor'>; label: string }> =
-  CATEGORY_TABS.filter(
-    (c): c is { id: Exclude<BuildCategory, 'decor'>; label: string; desc: string } =>
-      c.id !== 'decor',
-  ).map((c) => ({ id: c.id, label: c.label }));
+const BUILD_CATEGORIES: Array<{
+  id: Exclude<BuildCategory, 'decor'>;
+  label: string;
+  desc: string;
+}> = CATEGORY_TABS.filter(
+  (c): c is { id: Exclude<BuildCategory, 'decor'>; label: string; desc: string } =>
+    c.id !== 'decor',
+);
+
+const FUNCTIONAL_FURNITURE_IDS = new Set(['bed', 'chest', 'table_chair']);
 
 export interface PendingPlacementBarProps {
   hud: GameHudSnapshot;
@@ -97,7 +103,7 @@ export const PendingPlacementBar: React.FC<PendingPlacementBarProps> = ({
 
   return (
     <div
-      className={`raft-panel pointer-events-auto rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${className}`}
+      className={`raft-panel pointer-events-auto rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-[#d9a441]/80 ${className}`}
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -114,10 +120,10 @@ export const PendingPlacementBar: React.FC<PendingPlacementBarProps> = ({
           ) : (
             <span className="text-[#dfd1b8]">
               {hud.selectedTool === 'repair'
-                ? `按住受损木筏维修（耗 ${repairCost} 木）· 点空白处退回打捞钩`
+                ? `按住受损木筏维修（耗 ${repairCost} 木）· 右键或点空白处退回`
                 : hud.selectedTool === 'demolish'
-                  ? '点击已建结构或木板拆除（含其上家具）· 点空海面退回'
-                  : '点选目标位置摆放 · 点空白处自动退回打捞钩'}
+                  ? '点击已建结构或木板拆除 · 右键或点空白处退回'
+                  : '点击木筏或海面预览安放位置 · 点空白处自动退回打捞'}
             </span>
           )}
         </div>
@@ -141,9 +147,9 @@ export const PendingPlacementBar: React.FC<PendingPlacementBarProps> = ({
                     <ResourceIcon type={res} className="w-3 h-3 shrink-0" />
                     <span>{RESOURCE_LABELS[res]}</span>
                     <span className="font-bold">
-                      已有{owned}/需{req}
+                      需{req} · 已有{owned}
                     </span>
-                    {!enough && <span className="text-[#f09a93] font-extrabold">(缺{missing})</span>}
+                    {!enough && <span className="text-[#f09a93] font-extrabold">· 缺{missing}</span>}
                   </div>
                 );
               },
@@ -180,7 +186,7 @@ export const PendingPlacementBar: React.FC<PendingPlacementBarProps> = ({
           className="min-h-[40px] px-3 py-1.5 rounded-md border border-[#6c5440] bg-[#2a211a] hover:bg-[#3b2f25] text-[#dfd1b8] text-xs font-semibold flex items-center gap-1 cursor-pointer"
         >
           <X className="w-3.5 h-3.5" />
-          <span>退回打捞钩</span>
+          <span>取消 [Esc]</span>
         </button>
       </div>
     </div>
@@ -211,14 +217,13 @@ export const BuildDock: React.FC<BuildDockProps> = ({
     return true;
   };
 
-  const renderCostComparison = (def: BuildItemDef, compact = false) => {
+  const renderCostRecipe = (def: BuildItemDef, compact = false) => {
     const entries = Object.entries(def.cost) as Array<[ResourceType, number]>;
     return (
       <div className={`flex flex-wrap gap-1 ${compact ? 'mt-1' : 'mt-1.5'}`}>
         {entries.map(([res, req]) => {
           const owned = hud.resources[res] ?? 0;
           const enough = owned >= req;
-          const missing = Math.max(0, req - owned);
           return (
             <div
               key={res}
@@ -230,10 +235,7 @@ export const BuildDock: React.FC<BuildDockProps> = ({
             >
               <ResourceIcon type={res} className="w-3 h-3 shrink-0" />
               <span>{RESOURCE_LABELS[res]}</span>
-              <span className="font-bold">
-                已有{owned}/需{req}
-              </span>
-              {!enough && <span className="text-[#f09a93] font-extrabold">(缺{missing})</span>}
+              <span className="font-bold">×{req}</span>
             </div>
           );
         })}
@@ -253,24 +255,73 @@ export const BuildDock: React.FC<BuildDockProps> = ({
   const handlePickTool = (tool: InteractionTool) => {
     const next = hud.selectedTool === tool ? null : tool;
     onSelectTool(next);
-    if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (next !== null) {
       onSetDrawerOpen(false);
     }
   };
 
   const repairCost = hud.hasRepairStation ? 1 : 2;
   const canAffordRepair = hud.resources.wood >= repairCost;
+  const activeBuildMeta =
+    BUILD_CATEGORIES.find((c) => c.id === buildCategory) ?? BUILD_CATEGORIES[0];
   const visibleBuildItems = BUILD_ITEMS_BY_CATEGORY[buildCategory];
   const decorItems = BUILD_ITEMS_BY_CATEGORY.decor;
+  const functionalDecorItems = decorItems.filter((item) =>
+    FUNCTIONAL_FURNITURE_IDS.has(item.id),
+  );
+  const ambienceDecorItems = decorItems.filter(
+    (item) => !FUNCTIONAL_FURNITURE_IDS.has(item.id),
+  );
+
+  const renderDecorCard = (def: BuildItemDef) => {
+    const selected = hud.selectedTool === def.id;
+    const affordable = canAffordItem(def);
+    return (
+      <button
+        key={def.id}
+        type="button"
+        onClick={() => handlePickTool(def.id)}
+        className={`text-left p-2.5 rounded-lg border transition-all cursor-pointer flex items-start gap-2.5 min-h-[68px] ${
+          selected
+            ? 'bg-[#4f3923]/95 border-[#eab55c] shadow-lg'
+            : affordable
+              ? 'bg-[#211a14]/90 border-[#7c5b3a]/70 hover:border-[#c89b5a] hover:bg-[#2c231b]'
+              : 'bg-[#241816]/85 border-[#8f443e]/60 hover:border-[#b95a53]'
+        }`}
+      >
+        <div className="raft-slot w-10 h-10 rounded-md flex items-center justify-center shrink-0">
+          <BuildingIcon type={def.id} className="w-6 h-6" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-xs font-extrabold text-[#f7eedb]">{def.name}</span>
+            <span
+              className={`text-[10px] font-bold ${
+                affordable ? 'text-[#8fd48b]' : 'text-[#f09a93]'
+              }`}
+            >
+              {affordable ? '材料充足' : '材料不足'}
+            </span>
+          </div>
+          <p className="text-[11px] text-[#d6c5aa] mt-0.5 leading-snug">{def.shortDesc}</p>
+          {renderCostRecipe(def)}
+        </div>
+      </button>
+    );
+  };
 
   return (
-    <div className="fixed bottom-2 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[min(740px,calc(100vw-24px))] z-20 flex flex-col items-stretch gap-1.5 pointer-events-none">
-      {/* Subtle Active Action Indicator */}
+    <div className="fixed bottom-2 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[min(640px,calc(100vw-24px))] z-20 flex flex-col items-stretch gap-1.5 pointer-events-none">
+      {/* Subtle Active Mode Indicator when in Default Salvage Mode */}
       {!hud.selectedTool && !drawerOpen && (
         <div className="self-center pointer-events-none">
-          <div className="raft-panel-soft inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] text-[#e8dac0]">
-            <Anchor className="w-3 h-3 text-[#d9a441]" />
-            <span>{hud.activeModeLabel}</span>
+          <div className="raft-panel-soft inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] text-[#cbb692]">
+            <Anchor className="w-3 h-3 text-[#d9a441] shrink-0" />
+            <span>
+              {hud.context.canSalvage && hud.context.nearestFloatingType
+                ? `打捞模式 · 范围内有${RESOURCE_LABELS[hud.context.nearestFloatingType]}（优先抓近处）`
+                : `打捞模式 · 限木筏外 ${HOOK_RAFT_EDGE_DIAMETERS} 格内点击拉回`}
+            </span>
           </div>
         </div>
       )}
@@ -285,18 +336,32 @@ export const BuildDock: React.FC<BuildDockProps> = ({
 
       {/* Expandable Drawer Above Bottom Navigation */}
       {drawerOpen && (
-        <div className="raft-panel pointer-events-auto rounded-lg overflow-hidden flex flex-col max-h-[50vh] md:max-h-[42vh]">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-[#8a623f]/55 bg-[#1b1510]/80">
-            <div className="flex items-center gap-2 text-xs font-bold text-[#f7eedb]">
+        <div className="raft-panel pointer-events-auto rounded-lg overflow-hidden flex flex-col max-h-[54vh] md:max-h-[46vh]">
+          <div className="flex items-start justify-between gap-2 px-3 py-2 border-b border-[#8a623f]/55 bg-[#1b1510]/85">
+            <div className="flex items-start gap-2 min-w-0">
               {activeTab === 'building' ? (
                 <>
-                  <Hammer className="w-4 h-4 text-[#d9a441]" />
-                  <span>木筏扩建、功能设施与房屋结构</span>
+                  <Hammer className="w-4 h-4 text-[#d9a441] mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-sm font-extrabold text-[#f7eedb] leading-tight">
+                      木筏建造与生存设施
+                    </div>
+                    <div className="text-[10px] sm:text-[11px] text-[#c7b699] mt-0.5 leading-snug">
+                      按「扩建 → 饮食 → 工坊 → 防鲨 → 木屋」推进海上基地
+                    </div>
+                  </div>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-4 h-4 text-[#d9a441]" />
-                  <span>房屋家具与室内装修</span>
+                  <Sparkles className="w-4 h-4 text-[#d9a441] mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-sm font-extrabold text-[#f7eedb] leading-tight">
+                      木屋家具与室内装修
+                    </div>
+                    <div className="text-[10px] sm:text-[11px] text-[#c7b699] mt-0.5 leading-snug">
+                      功能家具可回血扩容，氛围装饰点亮木屋（支持 [T] 键旋转）
+                    </div>
+                  </div>
                 </>
               )}
             </div>
@@ -304,7 +369,7 @@ export const BuildDock: React.FC<BuildDockProps> = ({
             <button
               type="button"
               onClick={() => onSetDrawerOpen(false)}
-              className="raft-slot px-2.5 py-1 rounded hover:brightness-110 text-[#f3e4c8] text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+              className="raft-slot px-2.5 py-1 rounded hover:brightness-110 text-[#f3e4c8] text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0"
             >
               <ChevronDown className="w-3.5 h-3.5" />
               <span>收起</span>
@@ -378,10 +443,16 @@ export const BuildDock: React.FC<BuildDockProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-[#c7b699] px-0.5">
-                  <span>所需资源 vs 已有库存（选中并确认后扣除材料）</span>
-                  <span className="hidden sm:inline text-[#e8dac0]">
-                    已有：木{hud.resources.wood} · 塑{hud.resources.plastic} · 金{hud.resources.metal}
+                <div className="flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-md bg-[#17120e]/85 border border-[#6c4b2e]/45 text-[11px]">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-extrabold text-[#eab55c] shrink-0">
+                      {activeBuildMeta.label}
+                    </span>
+                    <span className="text-[#8a623f]">·</span>
+                    <span className="text-[#d6c5aa] leading-snug">{activeBuildMeta.desc}</span>
+                  </div>
+                  <span className="text-[10px] text-[#a79579] shrink-0">
+                    选定即收起并对比材料
                   </span>
                 </div>
 
@@ -445,7 +516,7 @@ export const BuildDock: React.FC<BuildDockProps> = ({
                           <p className="text-[11px] text-[#d6c5aa] mt-0.5 leading-snug">
                             {lateLocked ? hud.collectorUnlockReason : def.shortDesc}
                           </p>
-                          {renderCostComparison(def)}
+                          {renderCostRecipe(def)}
                         </div>
                       </button>
                     );
@@ -457,8 +528,8 @@ export const BuildDock: React.FC<BuildDockProps> = ({
             {activeTab === 'decor' && (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-1.5">
-                  <span className="text-[11px] text-[#d6c5aa]">
-                    所需资源 vs 已有库存（家具支持 T 键或按钮旋转方向）
+                  <span className="text-[11px] text-[#c7b699]">
+                    选择家具后支持 [T] 键或按钮旋转摆放
                   </span>
                   <div className="flex items-center gap-1">
                     <button
@@ -500,45 +571,30 @@ export const BuildDock: React.FC<BuildDockProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {decorItems.map((def) => {
-                    const selected = hud.selectedTool === def.id;
-                    const affordable = canAffordItem(def);
-                    return (
-                      <button
-                        key={def.id}
-                        type="button"
-                        onClick={() => handlePickTool(def.id)}
-                        className={`text-left p-2.5 rounded-lg border transition-all cursor-pointer flex items-start gap-2.5 min-h-[68px] ${
-                          selected
-                            ? 'bg-[#4f3923]/95 border-[#eab55c] shadow-lg'
-                            : affordable
-                              ? 'bg-[#211a14]/90 border-[#7c5b3a]/70 hover:border-[#c89b5a] hover:bg-[#2c231b]'
-                              : 'bg-[#241816]/85 border-[#8f443e]/60 hover:border-[#b95a53]'
-                        }`}
-                      >
-                        <div className="raft-slot w-10 h-10 rounded-md flex items-center justify-center shrink-0">
-                          <BuildingIcon type={def.id} className="w-6 h-6" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-1.5">
-                            <span className="text-xs font-extrabold text-[#f7eedb]">{def.name}</span>
-                            <span
-                              className={`text-[10px] font-bold ${
-                                affordable ? 'text-[#8fd48b]' : 'text-[#f09a93]'
-                              }`}
-                            >
-                              {affordable ? '材料充足' : '材料不足'}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-[#d6c5aa] mt-0.5 leading-snug">
-                            {def.shortDesc}
-                          </p>
-                          {renderCostComparison(def)}
-                        </div>
-                      </button>
-                    );
-                  })}
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-baseline justify-between gap-2 mb-1.5 px-0.5">
+                      <span className="text-xs font-extrabold text-[#eab55c]">功能家具</span>
+                      <span className="text-[10px] text-[#c7b699]">
+                        休息回血、扩容储物与饮食恢复加成
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {functionalDecorItems.map(renderDecorCard)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-baseline justify-between gap-2 mb-1.5 px-0.5">
+                      <span className="text-xs font-extrabold text-[#eab55c]">氛围装饰</span>
+                      <span className="text-[10px] text-[#c7b699]">
+                        夜间暖光照明与温馨室内美化
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ambienceDecorItems.map(renderDecorCard)}
+                    </div>
+                  </div>
                 </div>
               </>
             )}
@@ -549,24 +605,27 @@ export const BuildDock: React.FC<BuildDockProps> = ({
       {/* Collapsible Bottom Navigation: Building, Decoration, and Narrower Journal on Rightmost */}
       <nav
         aria-label="建造与装修导航"
-        className="raft-panel pointer-events-auto grid grid-cols-[1.2fr_1.2fr_0.78fr] gap-1.5 p-1.5 rounded-lg relative"
+        className="raft-panel pointer-events-auto grid grid-cols-[1.2fr_1.2fr_0.82fr] gap-1.5 p-1.5 rounded-lg relative"
       >
         <button
           type="button"
           onClick={() => handleTabPress('building')}
           aria-pressed={activeTab === 'building' && drawerOpen}
-          className={`min-h-[46px] px-3 py-2 rounded-md font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 border transition-colors cursor-pointer ${
+          className={`min-h-[48px] px-2.5 py-1.5 rounded-md flex items-center justify-center gap-1.5 border transition-colors cursor-pointer ${
             activeTab === 'building' && drawerOpen
               ? 'bg-[#5c4228] border-[#d9a441] text-[#fdf6ea]'
               : 'bg-[#1c1611]/85 border-[#6c4b2e]/55 text-[#efe3cc] hover:bg-[#2c231b]'
           }`}
         >
           <Hammer className="w-4 h-4 text-[#d9a441] shrink-0" />
-          <span>建造</span>
+          <div className="flex flex-col items-start leading-tight text-left min-w-0">
+            <span className="font-extrabold text-xs sm:text-sm">建造</span>
+            <span className="text-[10px] text-[#cbb692] truncate">生存与扩建</span>
+          </div>
           {activeTab === 'building' && drawerOpen ? (
-            <ChevronDown className="w-3.5 h-3.5 opacity-75" />
+            <ChevronDown className="w-3.5 h-3.5 opacity-75 shrink-0" />
           ) : (
-            <ChevronUp className="w-3.5 h-3.5 opacity-60" />
+            <ChevronUp className="w-3.5 h-3.5 opacity-60 shrink-0" />
           )}
         </button>
 
@@ -574,18 +633,21 @@ export const BuildDock: React.FC<BuildDockProps> = ({
           type="button"
           onClick={() => handleTabPress('decor')}
           aria-pressed={activeTab === 'decor' && drawerOpen}
-          className={`min-h-[46px] px-3 py-2 rounded-md font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 border transition-colors cursor-pointer ${
+          className={`min-h-[48px] px-2.5 py-1.5 rounded-md flex items-center justify-center gap-1.5 border transition-colors cursor-pointer ${
             activeTab === 'decor' && drawerOpen
               ? 'bg-[#5c4228] border-[#d9a441] text-[#fdf6ea]'
               : 'bg-[#1c1611]/85 border-[#6c4b2e]/55 text-[#efe3cc] hover:bg-[#2c231b]'
           }`}
         >
           <Home className="w-4 h-4 text-[#eab55c] shrink-0" />
-          <span>装修</span>
+          <div className="flex flex-col items-start leading-tight text-left min-w-0">
+            <span className="font-extrabold text-xs sm:text-sm">装修</span>
+            <span className="text-[10px] text-[#cbb692] truncate">家具与装饰</span>
+          </div>
           {activeTab === 'decor' && drawerOpen ? (
-            <ChevronDown className="w-3.5 h-3.5 opacity-75" />
+            <ChevronDown className="w-3.5 h-3.5 opacity-75 shrink-0" />
           ) : (
-            <ChevronUp className="w-3.5 h-3.5 opacity-60" />
+            <ChevronUp className="w-3.5 h-3.5 opacity-60 shrink-0" />
           )}
         </button>
 
@@ -604,14 +666,17 @@ export const BuildDock: React.FC<BuildDockProps> = ({
             onClick={onOpenJournal}
             aria-pressed={journalOpen}
             aria-label="Journal"
-            className={`w-full min-h-[46px] px-2 py-2 rounded-md font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
+            className={`w-full min-h-[48px] px-1.5 py-1.5 rounded-md flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
               journalOpen
                 ? 'bg-[#5c4228] border-[#d9a441] text-[#fdf6ea]'
                 : 'bg-[#1c1611]/85 border-[#6c4b2e]/55 text-[#efe3cc] hover:bg-[#2c231b]'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5 text-[#eab55c] shrink-0" />
-            <span>Journal</span>
+            <div className="flex flex-col items-start leading-tight text-left min-w-0">
+              <span className="font-bold text-[11px] sm:text-xs">Journal</span>
+              <span className="text-[9px] text-[#cbb692] truncate">漂流手账</span>
+            </div>
           </button>
         </div>
       </nav>

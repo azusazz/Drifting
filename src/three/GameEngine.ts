@@ -5,6 +5,8 @@ import {
   BUILD_ITEMS,
   CHEST_STORAGE_BONUS,
   DAY_DURATION_SECONDS,
+  HOOK_MAX_PLAYER_CAST,
+  HOOK_RAFT_EDGE_DIAMETERS,
   INITIAL_RESOURCES,
   STAGE_META,
   TILE_SIZE,
@@ -496,6 +498,7 @@ export class GameEngine {
 
     const dom = this.renderer.domElement;
     dom.addEventListener('webglcontextlost', this.handleContextLost);
+    dom.addEventListener('contextmenu', this.handleContextMenu);
     dom.addEventListener('pointerdown', this.handlePointerDown);
     dom.addEventListener('pointermove', this.handlePointerMove);
     dom.addEventListener('pointerup', this.handlePointerUp);
@@ -510,12 +513,17 @@ export class GameEngine {
 
     const dom = this.renderer.domElement;
     dom.removeEventListener('webglcontextlost', this.handleContextLost);
+    dom.removeEventListener('contextmenu', this.handleContextMenu);
     dom.removeEventListener('pointerdown', this.handlePointerDown);
     dom.removeEventListener('pointermove', this.handlePointerMove);
     dom.removeEventListener('pointerup', this.handlePointerUp);
     dom.removeEventListener('pointercancel', this.handlePointerCancel);
     dom.removeEventListener('wheel', this.handleWheel);
   }
+
+  private handleContextMenu = (e: MouseEvent): void => {
+    e.preventDefault();
+  };
 
   private handleResize = (): void => {
     if (this.disposed) return;
@@ -623,6 +631,17 @@ export class GameEngine {
   private handlePointerDown = (e: PointerEvent): void => {
     if (this.phase !== 'playing') return;
     soundEngine.startOceanAmbience();
+
+    if (e.button === 2) {
+      if (this.holdState) {
+        this.cancelHoldAction();
+      }
+      if (this.selectedTool) {
+        this.setSelectedTool(null);
+        this.pushToast('已切回打捞模式', 'info');
+      }
+      return;
+    }
 
     this.lastPointerDown = {
       x: e.clientX,
@@ -733,16 +752,45 @@ export class GameEngine {
     const wp = this.getRayWaterPoint(e.clientX, e.clientY);
     if (!wp) return;
 
-    // 1. If an action/build tool is active (e.g., placing Bed):
-    //    Valid target performs/previews; clicking elsewhere automatically reverts to Hook (拖垃圾) mode!
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    _rayMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    _rayMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(_rayMouse, this.camera);
+    const sharkHits = this.raycaster.intersectObject(this.sharkVisual.group, true);
+    const clickedShark =
+      sharkHits.length > 0 ||
+      Math.hypot(wp.x - this.shark.x, wp.z - this.shark.z) < 2.5;
+
+    // Raft UX: clicking the shark mid-action immediately cancels tool and strikes the shark
+    if (clickedShark) {
+      if (this.selectedTool) {
+        this.setSelectedTool(null);
+      }
+      this.triggerStrikeShark();
+      return;
+    }
+
+    // 1. If an action/build tool is active:
+    //    Valid target performs/previews; clicking floating debris seamlessly reverts to Hook and casts;
+    //    clicking invalid blank space automatically reverts to Hook (打捞模式).
     if (this.selectedTool) {
       if (this.selectedTool === 'repair') {
         const gx = Math.round(wp.x / TILE_SIZE);
         const gz = Math.round(wp.z / TILE_SIZE);
         const tile = this.tiles.get(tileKey(gx, gz));
         if (!tile || tile.data.status === 'intact') {
+          const clickedLoot = this.findClickedVisibleLoot(
+            e.clientX,
+            e.clientY,
+            wp,
+            e.pointerType === 'touch' ? 2.2 : 1.7,
+          );
           this.setSelectedTool(null);
-          this.pushToast('已切回打捞钩模式', 'info');
+          if (clickedLoot) {
+            this.throwHookAtItem(clickedLoot);
+          } else {
+            this.pushToast('已切回打捞模式', 'info');
+          }
         } else {
           this.pushToast('请按住受损地板或右侧按钮完成维修', 'info');
         }
@@ -751,8 +799,18 @@ export class GameEngine {
       if (this.selectedTool === 'demolish') {
         const didDemolish = this.tryDemolishAtWorld(wp.x, wp.z, e.clientX, e.clientY);
         if (!didDemolish) {
+          const clickedLoot = this.findClickedVisibleLoot(
+            e.clientX,
+            e.clientY,
+            wp,
+            e.pointerType === 'touch' ? 2.2 : 1.7,
+          );
           this.setSelectedTool(null);
-          this.pushToast('已切回打捞钩模式', 'info');
+          if (clickedLoot) {
+            this.throwHookAtItem(clickedLoot);
+          } else {
+            this.pushToast('已切回打捞模式', 'info');
+          }
         }
         return;
       }
@@ -760,8 +818,18 @@ export class GameEngine {
       const prev = this.pendingTarget;
       this.previewToolAtWorld(wp.x, wp.z);
       if (!this.pendingTarget?.valid) {
+        const clickedLoot = this.findClickedVisibleLoot(
+          e.clientX,
+          e.clientY,
+          wp,
+          e.pointerType === 'touch' ? 2.2 : 1.7,
+        );
         this.setSelectedTool(null);
-        this.pushToast('已自动切回打捞钩模式', 'info');
+        if (clickedLoot) {
+          this.throwHookAtItem(clickedLoot);
+        } else {
+          this.pushToast('已自动切回打捞模式', 'info');
+        }
         return;
       }
       if (
@@ -778,21 +846,7 @@ export class GameEngine {
       return;
     }
 
-    // 2. Check if user clicked/tapped the 3D shark directly -> instant spear strike!
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    _rayMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    _rayMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(_rayMouse, this.camera);
-    const sharkHits = this.raycaster.intersectObject(this.sharkVisual.group, true);
-    if (
-      sharkHits.length > 0 ||
-      Math.hypot(wp.x - this.shark.x, wp.z - this.shark.z) < 2.6
-    ) {
-      this.triggerStrikeShark();
-      return;
-    }
-
-    // 3. Default Hook / Salvage mode: click visible floating debris in camera sight to pull it back immediately!
+    // 2. Default Hook / Salvage mode: click visible floating debris in camera sight to pull it back immediately!
     const clickedLoot = this.findClickedVisibleLoot(
       e.clientX,
       e.clientY,
@@ -804,7 +858,7 @@ export class GameEngine {
       return;
     }
 
-    // 4. Hint when tapping a damaged plank quickly without holding
+    // 3. Hint when tapping a damaged plank quickly without holding
     const gx = Math.round(wp.x / TILE_SIZE);
     const gz = Math.round(wp.z / TILE_SIZE);
     const tile = this.tiles.get(tileKey(gx, gz));
@@ -812,6 +866,65 @@ export class GameEngine {
       this.pushToast('维修受损甲板需要按住不放（或按住 R 键）', 'info');
     }
   };
+
+  private getRaftBounds(): { cx: number; cz: number; radius: number } {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    let count = 0;
+    for (const tile of this.tiles.values()) {
+      if (tile.data.status === 'broken') continue;
+      const wx = tile.data.gx * TILE_SIZE;
+      const wz = tile.data.gz * TILE_SIZE;
+      if (wx < minX) minX = wx;
+      if (wx > maxX) maxX = wx;
+      if (wz < minZ) minZ = wz;
+      if (wz > maxZ) maxZ = wz;
+      count += 1;
+    }
+    if (count === 0) {
+      return { cx: 0, cz: 0, radius: TILE_SIZE * 0.5 };
+    }
+    const cx = (minX + maxX) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+    const radius = Math.hypot((maxX - minX) * 0.5 + TILE_SIZE * 0.5, (maxZ - minZ) * 0.5 + TILE_SIZE * 0.5);
+    return { cx, cz, radius };
+  }
+
+  private getDistanceOutsideRaft(x: number, z: number): number {
+    const half = TILE_SIZE * 0.5;
+    let minEdgeDist = Infinity;
+    for (const tile of this.tiles.values()) {
+      if (tile.data.status === 'broken') continue;
+      const tx = tile.data.gx * TILE_SIZE;
+      const tz = tile.data.gz * TILE_SIZE;
+      const dx = Math.max(0, Math.abs(x - tx) - half);
+      const dz = Math.max(0, Math.abs(z - tz) - half);
+      const d = Math.hypot(dx, dz);
+      if (d < minEdgeDist) minEdgeDist = d;
+    }
+    if (!Number.isFinite(minEdgeDist)) {
+      return Math.hypot(x - this.playerPos.x, z - this.playerPos.z);
+    }
+    return minEdgeDist;
+  }
+
+  private isItemVisibleInCamera(item: FloatingItemRuntime): boolean {
+    _projPos.set(item.x, 0.1, item.z).project(this.camera);
+    return (
+      _projPos.z <= 1.0 &&
+      Math.abs(_projPos.x) <= 1.02 &&
+      Math.abs(_projPos.y) <= 1.02
+    );
+  }
+
+  private isItemInHookReach(item: FloatingItemRuntime): boolean {
+    const distToPlayer = Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z);
+    if (distToPlayer > HOOK_MAX_PLAYER_CAST) return false;
+    const distOutsideRaft = this.getDistanceOutsideRaft(item.x, item.z);
+    return distOutsideRaft <= TILE_SIZE * HOOK_RAFT_EDGE_DIAMETERS;
+  }
 
   private findClickedVisibleLoot(
     clientX: number,
@@ -824,47 +937,62 @@ export class GameEngine {
     _rayMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(_rayMouse, this.camera);
 
-    // Direct 3D mesh raycast first
+    // 1. Direct 3D mesh raycast first — prioritize closest reachable items first
     const visibleMeshes = this.floatingItems
       .filter((item) => !item.hooked)
       .map((item) => item.mesh);
+    let outOfReachHit: FloatingItemRuntime | null = null;
     if (visibleMeshes.length > 0) {
       const hits = this.raycaster.intersectObjects(visibleMeshes, true);
-      if (hits.length > 0) {
-        let obj: THREE.Object3D | null = hits[0].object;
+      const hitItems: FloatingItemRuntime[] = [];
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
         while (obj && obj.parent !== this.floatingGroup) {
           obj = obj.parent;
         }
         const matched = this.floatingItems.find((item) => item.mesh === obj);
-        if (matched && this.isItemInSightAndReach(matched)) {
-          return matched;
+        if (matched && !hitItems.includes(matched) && this.isItemVisibleInCamera(matched)) {
+          hitItems.push(matched);
         }
       }
-    }
-
-    // Fallback generous tap radius on water plane for mobile fingers
-    let closestItem: FloatingItemRuntime | null = null;
-    let minItemDist = fallbackRadius;
-    for (const item of this.floatingItems) {
-      if (item.hooked || !this.isItemInSightAndReach(item)) continue;
-      const d = Math.hypot(waterPoint.x - item.x, waterPoint.z - item.z);
-      if (d < minItemDist) {
-        minItemDist = d;
-        closestItem = item;
+      const reachableHits = hitItems.filter((item) => this.isItemInHookReach(item));
+      if (reachableHits.length > 0) {
+        reachableHits.sort(
+          (a, b) =>
+            Math.hypot(a.x - this.playerPos.x, a.z - this.playerPos.z) -
+            Math.hypot(b.x - this.playerPos.x, b.z - this.playerPos.z),
+        );
+        return reachableHits[0];
+      }
+      if (hitItems.length > 0) {
+        outOfReachHit = hitItems[0];
       }
     }
-    return closestItem;
-  }
 
-  private isItemInSightAndReach(item: FloatingItemRuntime): boolean {
-    const distToPlayer = Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z);
-    if (distToPlayer > 16.5) return false;
-    _projPos.set(item.x, 0.1, item.z).project(this.camera);
-    return (
-      _projPos.z <= 1.0 &&
-      Math.abs(_projPos.x) <= 1.02 &&
-      Math.abs(_projPos.y) <= 1.02
-    );
+    // 2. Fallback tap radius on water plane — prioritize nearest in-reach items first
+    let bestReachable: FloatingItemRuntime | null = null;
+    let bestReachScore = Infinity;
+    let closestOutOfReach: FloatingItemRuntime | null = outOfReachHit;
+    let minOutTapDist = 1.35;
+
+    for (const item of this.floatingItems) {
+      if (item.hooked || !this.isItemVisibleInCamera(item)) continue;
+      const tapDist = Math.hypot(waterPoint.x - item.x, waterPoint.z - item.z);
+      if (tapDist >= fallbackRadius) continue;
+
+      if (this.isItemInHookReach(item)) {
+        const playerDist = Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z);
+        const score = playerDist * 0.65 + tapDist * 0.5;
+        if (score < bestReachScore) {
+          bestReachScore = score;
+          bestReachable = item;
+        }
+      } else if (!outOfReachHit && tapDist < minOutTapDist) {
+        minOutTapDist = tapDist;
+        closestOutOfReach = item;
+      }
+    }
+    return bestReachable ?? closestOutOfReach;
   }
 
   private handlePointerCancel = (): void => {
@@ -1084,10 +1212,41 @@ export class GameEngine {
         return 'food';
       })();
 
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 12 + Math.random() * 7;
-    const x = customX ?? Math.cos(angle) * dist;
-    const z = customZ ?? Math.sin(angle) * dist;
+    let x: number;
+    let z: number;
+    let vx: number;
+    let vz: number;
+
+    if (customX !== undefined && customZ !== undefined) {
+      x = customX;
+      z = customZ;
+      // Gentle tangential/diagonal drift so starter supplies pass around the raft naturally
+      const tangentAngle = Math.atan2(z, x) + (Math.random() > 0.5 ? 1 : -1) * (Math.PI * 0.42 + (Math.random() - 0.5) * 0.5);
+      const speed = 0.24 + Math.random() * 0.22;
+      vx = Math.cos(tangentAngle) * speed;
+      vz = Math.sin(tangentAngle) * speed;
+    } else {
+      // Spawn upstream along varied oceanic trajectories with lateral offset so items drift past rather than homing into center
+      const bounds = this.getRaftBounds();
+      const dirAngle = Math.random() * Math.PI * 2;
+      const dirX = Math.cos(dirAngle);
+      const dirZ = Math.sin(dirAngle);
+      const perpX = -dirZ;
+      const perpZ = dirX;
+
+      const upstreamDist = bounds.radius + 10.5 + Math.random() * 5.5;
+      const lateralSpan = bounds.radius + 8.8;
+      const lateral = (Math.random() - 0.5) * 2 * lateralSpan;
+
+      x = bounds.cx - dirX * upstreamDist + perpX * lateral;
+      z = bounds.cz - dirZ * upstreamDist + perpZ * lateral;
+
+      const baseSpeed = this.weather === 'storm' ? 0.94 : 0.6;
+      const speed = baseSpeed + Math.random() * 0.34;
+      const sway = (Math.random() - 0.5) * 0.18;
+      vx = dirX * speed + perpX * sway;
+      vz = dirZ * speed + perpZ * sway;
+    }
 
     const mesh = createFloatingItemVisual(chosen, this.mats);
     mesh.position.set(x, 0, z);
@@ -1100,8 +1259,8 @@ export class GameEngine {
       mesh,
       x,
       z,
-      vx: -x * 0.025 + (Math.random() - 0.5) * 0.25,
-      vz: -z * 0.025 + (Math.random() - 0.5) * 0.25,
+      vx,
+      vz,
       bobOffset: Math.random() * Math.PI * 2,
       hooked: false,
     });
@@ -1604,16 +1763,19 @@ export class GameEngine {
     soundEngine.playBuild();
     this.updateStageProgression();
 
-    // Refresh preview at current spot
+    // Refresh preview cleanly: sea_floor auto-advances to next open edge;
+    // single-slot placements clear pendingTarget so we don't flash a false "tile occupied" error.
     if (def.placementKind === 'sea_floor') {
       const nextSea = this.findNearestSeaSlotToPlayer();
       if (nextSea) {
         this.previewToolAtWorld(nextSea.gx * TILE_SIZE, nextSea.gz * TILE_SIZE);
       } else {
-        this.previewToolAtWorld(worldX, worldZ);
+        this.pendingTarget = null;
+        this.previewMesh.visible = false;
       }
     } else {
-      this.previewToolAtWorld(worldX, worldZ);
+      this.pendingTarget = null;
+      this.previewMesh.visible = false;
     }
     this.emitHud();
   }
@@ -1993,6 +2155,9 @@ export class GameEngine {
 
   public triggerStrikeShark(): void {
     if (this.phase !== 'playing') return;
+    if (this.holdState) {
+      this.holdState = null;
+    }
     if (this.shark.behavior === 'repelled') {
       this.pushToast('鲨鱼已被驱离，暂时在远海恢复', 'info');
       return;
@@ -2117,9 +2282,20 @@ export class GameEngine {
   }
 
   private throwHookAtItem(item: FloatingItemRuntime): void {
-    const dist = Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z);
-    if (dist > 16.5) {
-      this.pushToast('距离过远，请稍微走近一点再拉回', 'info');
+    const distOutsideRaft = this.getDistanceOutsideRaft(item.x, item.z);
+    const maxRaftReach = TILE_SIZE * HOOK_RAFT_EDGE_DIAMETERS;
+    if (distOutsideRaft > maxRaftReach) {
+      this.addPopup3D('超出打捞范围', 'info', item.x, 0.8, item.z);
+      this.pushToast(
+        `超出木筏外 ${HOOK_RAFT_EDGE_DIAMETERS} 格打捞范围，请等它飘近或扩建木筏！`,
+        'info',
+      );
+      return;
+    }
+    const distToPlayer = Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z);
+    if (distToPlayer > HOOK_MAX_PLAYER_CAST) {
+      this.addPopup3D('走近该侧边缘', 'info', item.x, 0.8, item.z);
+      this.pushToast('抓钩长度有限，请走近靠该物资一侧的木筏边缘再甩钩！', 'info');
       return;
     }
     this.hookState.active = true;
@@ -2225,8 +2401,8 @@ export class GameEngine {
 
     // Floating loot spawning & drift
     this.spawnTimer -= dt;
-    if (this.spawnTimer <= 0 && this.floatingItems.length < 18) {
-      this.spawnTimer = this.weather === 'storm' ? 2.4 : 3.2;
+    if (this.spawnTimer <= 0 && this.floatingItems.length < 20) {
+      this.spawnTimer = this.weather === 'storm' ? 2.2 : 2.7;
       this.spawnFloatingItem();
     }
     this.updateFloatingItems(dt);
@@ -2496,6 +2672,9 @@ export class GameEngine {
   }
 
   private updateFloatingItems(dt: number): void {
+    const bounds = this.getRaftBounds();
+    const despawnDist = bounds.radius + 22;
+
     for (let i = this.floatingItems.length - 1; i >= 0; i--) {
       const item = this.floatingItems[i];
       if (item.hooked) continue;
@@ -2510,16 +2689,16 @@ export class GameEngine {
       );
       item.mesh.rotation.y += dt * 0.45;
 
-      // Auto-collect if drifting directly into player within 1.15m
+      // Auto-collect only if colliding right next to the player within 0.80m
       if (
         this.phase === 'playing' &&
-        Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z) < 1.15
+        Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z) < 0.8
       ) {
         this.collectFloatingItem(item);
         continue;
       }
 
-      if (Math.hypot(item.x, item.z) > 25) {
+      if (Math.hypot(item.x - bounds.cx, item.z - bounds.cz) > despawnDist) {
         this.floatingGroup.remove(item.mesh);
         this.floatingItems.splice(i, 1);
       }
@@ -3318,9 +3497,9 @@ export class GameEngine {
 
   private computeContextHints(): ContextualHints {
     let nearestFloating: FloatingItemRuntime | null = null;
-    let minFDist = 9.5;
+    let minFDist = Infinity;
     for (const item of this.floatingItems) {
-      if (item.hooked) continue;
+      if (item.hooked || !this.isItemInHookReach(item)) continue;
       const d = Math.hypot(item.x - this.playerPos.x, item.z - this.playerPos.z);
       if (d < minFDist) {
         minFDist = d;
@@ -3447,11 +3626,11 @@ export class GameEngine {
 
     const activeModeLabel =
       this.selectedTool === null
-        ? '打捞钩（点击海面物资拉回）'
+        ? '打捞模式'
         : this.selectedTool === 'repair'
-          ? '维修锤（按住受损地板修复）'
+          ? '维修模式'
           : this.selectedTool === 'demolish'
-            ? '拆除工具（点击目标拆除）'
+            ? '拆除模式'
             : `安放：${BUILD_ITEMS[this.selectedTool].name}`;
 
     const holdAction: HoldProgressState | null = this.holdState

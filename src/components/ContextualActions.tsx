@@ -15,15 +15,19 @@ export const ContextualActions: React.FC<ContextualActionsProps> = ({
   onStartHold,
   onCancelHold,
 }) => {
-  const { context, holdAction, playerInWater } = hud;
+  const { context, holdAction, playerInWater, shark, selectedTool } = hud;
   const repairCost = hud.hasRepairStation ? 1 : 2;
+  const sharkAlertVisible =
+    playerInWater || shark.behavior === 'warning' || shark.behavior === 'attacking';
+  const showFightHere = context.canFightShark && !sharkAlertVisible;
+  const isPlacingItem =
+    selectedTool !== null && selectedTool !== 'repair' && selectedTool !== 'demolish';
 
   const hasAny =
     playerInWater ||
-    context.canFightShark ||
+    showFightHere ||
     context.canRepairNearby ||
-    context.canHarvestNearby ||
-    context.canRestBed;
+    (!isPlacingItem && (context.canHarvestNearby || context.canRestBed));
 
   if (!hasAny) return null;
 
@@ -68,7 +72,7 @@ export const ContextualActions: React.FC<ContextualActionsProps> = ({
   };
 
   const bottomClass =
-    hud.chestCount > 0 ? 'bottom-[124px] md:bottom-16' : 'bottom-20';
+    hud.chestCount > 0 ? 'bottom-[120px] xl:bottom-16' : 'bottom-20 md:bottom-16';
 
   return (
     <div className={`fixed right-3 ${bottomClass} z-10 flex flex-col items-end gap-1.5 pointer-events-none`}>
@@ -79,7 +83,7 @@ export const ContextualActions: React.FC<ContextualActionsProps> = ({
         </div>
       )}
 
-      {context.canFightShark && (
+      {showFightHere && (
         <button
           type="button"
           onClick={onStrikeShark}
@@ -95,7 +99,8 @@ export const ContextualActions: React.FC<ContextualActionsProps> = ({
         </button>
       )}
 
-      {context.canHarvestNearby &&
+      {!isPlacingItem &&
+        context.canHarvestNearby &&
         renderHoldButton(
           'harvest',
           context.nearestHarvestKind === 'water' ? '按住收取净水' : '按住收获食物',
@@ -117,7 +122,8 @@ export const ContextualActions: React.FC<ContextualActionsProps> = ({
           'bg-[#c48d40]/45',
         )}
 
-      {context.canRestBed &&
+      {!isPlacingItem &&
+        context.canRestBed &&
         renderHoldButton(
           'rest',
           context.bedSkipNight ? '按住安睡至黎明' : '按住木床休息',

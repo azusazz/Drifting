@@ -8,6 +8,8 @@ import {
 } from '../types/game';
 
 export const TILE_SIZE = 2.1;
+export const HOOK_RAFT_EDGE_DIAMETERS = 3.5;
+export const HOOK_MAX_PLAYER_CAST = 9.5;
 export const DAY_DURATION_SECONDS = 240;
 export const BASE_STORAGE_CAPACITY = 36;
 export const CHEST_STORAGE_BONUS = 25;
@@ -21,12 +23,12 @@ export const INITIAL_RESOURCES = {
 };
 
 export const CATEGORY_TABS: Array<{ id: BuildCategory; label: string; desc: string }> = [
-  { id: 'structure', label: '基础结构', desc: '扩建木筏甲板与加固边缘' },
-  { id: 'survival', label: '生存设施', desc: '淡水净化与物资储备' },
-  { id: 'production', label: '生产设施', desc: '食物种植与工程制作' },
-  { id: 'defense', label: '防御设施', desc: '抵御鲨鱼与自动维护' },
-  { id: 'house', label: '房屋结构', desc: '搭建海上木屋地板、墙门窗与屋顶' },
-  { id: 'decor', label: '室内装修', desc: '布置床铺、储物箱、灯具与温馨家居' },
+  { id: 'structure', label: '扩建加固', desc: '先铺设木筏地板扩展空间，再用铁木加固外围边缘' },
+  { id: 'survival', label: '饮食生存', desc: '建造净水器收集淡水、菜园培育食物，稳固生存底线' },
+  { id: 'production', label: '工坊自动', desc: '建造工作台解锁进阶蓝图，后期解锁自动收集网' },
+  { id: 'defense', label: '防鲨维修', desc: '布置防御拒马反击鲨鱼，并用维修站自动养护木板' },
+  { id: 'house', label: '木屋结构', desc: '铺设室内地板并搭建墙、门、窗与屋顶遮风挡雨' },
+  { id: 'decor', label: '室内装修', desc: '摆放功能家具与温馨灯饰，打造海上安全小屋' },
 ];
 
 export const BUILD_ITEMS: Record<BuildItemId, BuildItemDef> = {
@@ -64,7 +66,7 @@ export const BUILD_ITEMS: Record<BuildItemId, BuildItemDef> = {
   },
   garden: {
     id: 'garden',
-    category: 'production',
+    category: 'survival',
     name: '菜园',
     shortDesc: '培育耐盐作物',
     detailDesc: '每隔 16 秒成熟一茬蔬菜，每次收获 +2 食物（点击或按 E 收获）。',
@@ -240,8 +242,8 @@ export const BUILD_ITEMS: Record<BuildItemId, BuildItemDef> = {
 
 export const BUILD_ITEMS_BY_CATEGORY: Record<BuildCategory, BuildItemDef[]> = {
   structure: [BUILD_ITEMS.floor, BUILD_ITEMS.reinforce],
-  survival: [BUILD_ITEMS.purifier],
-  production: [BUILD_ITEMS.garden, BUILD_ITEMS.workbench, BUILD_ITEMS.collector],
+  survival: [BUILD_ITEMS.purifier, BUILD_ITEMS.garden],
+  production: [BUILD_ITEMS.workbench, BUILD_ITEMS.collector],
   defense: [BUILD_ITEMS.defense, BUILD_ITEMS.repair_station],
   house: [
     BUILD_ITEMS.house_floor,

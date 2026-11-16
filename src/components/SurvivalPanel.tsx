@@ -3,29 +3,25 @@ import {
   Heart,
   Utensils,
   Droplets,
-  BedDouble,
   Package,
   Sparkles,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { GameHudSnapshot, HoldActionKind } from '../types/game';
+import { CHEST_STORAGE_BONUS } from '../constants/buildings';
+import { GameHudSnapshot } from '../types/game';
 import { ResourceIcon } from './Icons';
 
 interface SurvivalPanelProps {
   hud: GameHudSnapshot;
   onConsumeFood: () => void;
   onConsumeWater: () => void;
-  onStartHold: (kind: HoldActionKind) => void;
-  onCancelHold: (kind?: HoldActionKind) => void;
 }
 
 export const SurvivalPanel: React.FC<SurvivalPanelProps> = ({
   hud,
   onConsumeFood,
   onConsumeWater,
-  onStartHold,
-  onCancelHold,
 }) => {
   const [collapsed, setCollapsed] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth < 768 : false,
@@ -34,7 +30,6 @@ export const SurvivalPanel: React.FC<SurvivalPanelProps> = ({
   const { health, hunger, thirst } = hud.survival;
   const storagePct = Math.min(100, Math.round((hud.storageUsed / hud.storageMax) * 100));
   const storageFull = hud.storageUsed >= hud.storageMax;
-  const restingHold = hud.holdAction?.kind === 'rest' ? hud.holdAction : null;
 
   const resourceItems: Array<{
     key: 'wood' | 'plastic' | 'metal' | 'food' | 'water';
@@ -166,38 +161,13 @@ export const SurvivalPanel: React.FC<SurvivalPanelProps> = ({
             </div>
           </div>
 
-          {/* Hold-to-Rest Bed Prompt */}
-          {hud.nearBed && (
-            <button
-              type="button"
-              onPointerDown={() => onStartHold('rest')}
-              onPointerUp={() => onCancelHold('rest')}
-              onPointerLeave={() => onCancelHold('rest')}
-              onPointerCancel={() => onCancelHold('rest')}
-              className="relative overflow-hidden flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md text-xs font-bold bg-[#354c6b] hover:bg-[#415c80] text-[#f7eedb] border border-[#7292be]/60 cursor-pointer select-none"
-            >
-              {restingHold && (
-                <div
-                  className="absolute inset-y-0 left-0 bg-[#7292be]/50 pointer-events-none"
-                  style={{ width: `${Math.round(restingHold.progress * 100)}%` }}
-                />
-              )}
-              <BedDouble className="w-3.5 h-3.5 text-[#c7dcf5] relative z-10" />
-              <span className="relative z-10">
-                {hud.timeOfDay === 'night' || hud.timeOfDay === 'evening'
-                  ? '按住安睡至黎明'
-                  : '按住木床小憩'}
-              </span>
-            </button>
-          )}
-
-          {/* Comfort / Home Buffs (clean compact text) */}
+          {/* Comfort / Home Buffs (Level 3 metadata) */}
           {(hud.playerIndoors || hud.hasTableBuff || hud.lampCount > 0) && (
-            <div className="flex flex-wrap gap-x-2 gap-y-0.5 pt-1 border-t border-[#8a623f]/40 text-[10px] text-[#e6c47a]">
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5 pt-1 border-t border-[#8a623f]/40 text-[10px] text-[#cbb692]">
               {hud.playerIndoors && <span>室内庇护</span>}
               {hud.hasTableBuff && <span className="text-[#90d38c]">桌椅饮食+25%</span>}
               {hud.lampCount > 0 && (
-                <span className="flex items-center gap-0.5 text-[#f0b467]">
+                <span className="flex items-center gap-0.5 text-[#e6c47a]">
                   <Sparkles className="w-2.5 h-2.5" />
                   暖灯×{hud.lampCount}
                 </span>
@@ -205,12 +175,19 @@ export const SurvivalPanel: React.FC<SurvivalPanelProps> = ({
             </div>
           )}
 
-          {/* Inventory */}
+          {/* Inventory (Shared Total Storage) */}
           <div className="pt-1.5 border-t border-[#8a623f]/45">
             <div className="flex items-center justify-between text-[11px] mb-1.5">
               <span className="flex items-center gap-1 text-[#e6c47a] font-semibold">
                 <Package className="w-3.5 h-3.5 text-[#d9a441]" />
-                <span>已有资源</span>
+                <span>
+                  总库存
+                  {hud.chestCount > 0 && (
+                    <span className="text-[10px] font-normal text-[#cbb692] ml-1">
+                      (含箱+{hud.chestCount * CHEST_STORAGE_BONUS})
+                    </span>
+                  )}
+                </span>
               </span>
               <span
                 className={`tabular-nums font-bold ${

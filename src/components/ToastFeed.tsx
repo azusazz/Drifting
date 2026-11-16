@@ -16,7 +16,7 @@ export const ToastFeed: React.FC<ToastFeedProps> = ({ toasts }) => {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-36 right-2 md:top-16 md:right-3 z-20 flex flex-col items-end gap-1 pointer-events-none max-w-[220px] sm:max-w-[260px]">
+    <div className="fixed top-[112px] right-2 md:top-16 md:right-3 z-20 flex flex-col items-end gap-1 pointer-events-none max-w-[205px] sm:max-w-[250px]">
       {toasts.map((t) => (
         <div
           key={t.id}

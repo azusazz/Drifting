@@ -27,6 +27,7 @@ import { GameEngine } from './three/GameEngine';
 import {
   FloatingPopup,
   GameHudSnapshot,
+  InteractionTool,
   JournalEntry,
   ToastMessage,
 } from './types/game';
@@ -69,7 +70,7 @@ const INITIAL_HUD: GameHudSnapshot = {
     maxThirst: 100,
   },
   selectedTool: null,
-  activeModeLabel: '打捞钩（点击海面物资拉回）',
+  activeModeLabel: '打捞模式',
   pendingPlacement: null,
   holdAction: null,
   rotation: 0,
@@ -140,6 +141,8 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [activeTab, setActiveTab] = useState<MainTabId>('building');
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
+  const [chestOpen, setChestOpen] = useState<boolean>(false);
+  const prevToolRef = useRef<InteractionTool>(null);
 
   const [journalOpen, setJournalOpen] = useState<boolean>(false);
   const [journalBubble, setJournalBubble] = useState<string | null>(null);
@@ -208,13 +211,30 @@ export default function App() {
     if (!el) return;
 
     const engine = new GameEngine(el, {
-      onHudUpdate: (snapshot) => setHud(snapshot),
+      onHudUpdate: (snapshot) => {
+        setHud(snapshot);
+        if (snapshot.selectedTool !== prevToolRef.current) {
+          prevToolRef.current = snapshot.selectedTool;
+          if (snapshot.selectedTool !== null) {
+            setDrawerOpen(false);
+            setJournalOpen(false);
+            setChestOpen(false);
+          }
+        }
+        if (snapshot.phase !== 'playing') {
+          setDrawerOpen(false);
+          setChestOpen(false);
+        }
+        if (snapshot.chestCount <= 0) {
+          setChestOpen(false);
+        }
+      },
       onPopupsUpdate: (nextPopups) => setPopups(nextPopups),
       onToast: (toast) => {
-        setToasts((prev) => [...prev.slice(-3), toast]);
+        setToasts((prev) => [...prev.slice(-1), toast]);
         window.setTimeout(() => {
           setToasts((prev) => prev.filter((item) => item.id !== toast.id));
-        }, 3200);
+        }, 2600);
       },
     });
 
@@ -225,10 +245,51 @@ export default function App() {
     };
   }, []);
 
+  const handleSetDrawerOpen = useCallback((open: boolean) => {
+    setDrawerOpen(open);
+    if (open) {
+      setJournalOpen(false);
+      setChestOpen(false);
+    }
+  }, []);
+
+  const handleSelectTab = useCallback((tab: MainTabId) => {
+    setActiveTab(tab);
+    setJournalOpen(false);
+    setChestOpen(false);
+  }, []);
+
+  const handleToggleChest = useCallback(() => {
+    setChestOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setDrawerOpen(false);
+        setJournalOpen(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSelectTool = useCallback((tool: InteractionTool) => {
+    engineRef.current?.setSelectedTool(tool);
+    if (tool !== null) {
+      setDrawerOpen(false);
+      setJournalOpen(false);
+      setChestOpen(false);
+    }
+  }, []);
+
   const handleOpenJournal = () => {
     setJournalBubble(null);
     setJournalQuote((prev) => pickNextQuote(prev));
-    setJournalOpen((open) => !open);
+    setJournalOpen((open) => {
+      const next = !open;
+      if (next) {
+        setDrawerOpen(false);
+        setChestOpen(false);
+      }
+      return next;
+    });
   };
 
   const handleAddJournalEntry = (mood: string, text: string) => {
@@ -291,8 +352,6 @@ export default function App() {
               hud={hud}
               onConsumeFood={() => engineRef.current?.consumeFood()}
               onConsumeWater={() => engineRef.current?.consumeWater()}
-              onStartHold={(kind) => engineRef.current?.startHoldAction(kind, 'ui')}
-              onCancelHold={(kind) => engineRef.current?.cancelHoldAction(kind)}
             />
           </div>
 
@@ -321,7 +380,13 @@ export default function App() {
 
           {/* Bottom-Right Chest Categorized Backpack (visible only when >= 1 chest built) */}
           {hud.phase === 'playing' && (
-            <ChestInventory hud={hud} hiddenOnMobile={drawerOpen} />
+            <ChestInventory
+              hud={hud}
+              open={chestOpen}
+              onToggle={handleToggleChest}
+              onClose={() => setChestOpen(false)}
+              hiddenOnMobile={drawerOpen}
+            />
           )}
 
           {/* Fixed Bottom Collapsible Navigation (Building, Decoration, Journal) */}
@@ -331,10 +396,10 @@ export default function App() {
             drawerOpen={drawerOpen}
             journalOpen={journalOpen}
             journalBubble={journalBubble}
-            onSelectTab={(tab) => setActiveTab(tab)}
-            onSetDrawerOpen={(open) => setDrawerOpen(open)}
+            onSelectTab={handleSelectTab}
+            onSetDrawerOpen={handleSetDrawerOpen}
             onOpenJournal={handleOpenJournal}
-            onSelectTool={(tool) => engineRef.current?.setSelectedTool(tool)}
+            onSelectTool={handleSelectTool}
             onConfirmPlacement={() => engineRef.current?.confirmPendingPlacement()}
             onRotate={() => engineRef.current?.rotatePlacement()}
             onToggleRoofCutaway={() => engineRef.current?.toggleRoofCutaway()}
